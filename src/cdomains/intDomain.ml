@@ -1413,7 +1413,7 @@ module Enums : S = struct
   let pretty_list xs = text "(" ++ (try List.reduce (fun a b -> a ++ text "," ++ b) xs with _ -> nil) ++ text ")"
   let pretty_f _ _ = function
     | Inc [] -> text "bot"
-    | Exc ([],r) -> text ("top, " ^ (Prelude.Ana.sprint R.pretty r)) 
+    | Exc ([],r) -> text ("top, " ^ (Prelude.Ana.sprint R.pretty r))
     | Inc xs -> text "Inc" ++ pretty_list (List.map (I.pretty ()) xs)
     | Exc (xs,r) -> text "Exc" ++ pretty_list (List.map (I.pretty ()) xs)
   let toXML_f sh x = Xml.Element ("Leaf", [("text", sh 80 x)],[])
@@ -1471,14 +1471,14 @@ module Enums : S = struct
         | _ -> x :: merge_sub xs b
       )
   (* let merge_sub x y = Set.(diff (of_list x) (of_list y) |> to_list) *)
-  let join a b = 
+  let join a b =
     print_endline @@ (Prelude.Ana.sprint pretty a) ^ " " ^ (Prelude.Ana.sprint pretty b);
     match a, b with
       | Inc x, Inc y -> let z = (merge_cup x y) in if List.length z <= max_elems () then Inc z else Exc ([], R.of_int 1000L)
       | Exc (x,r1), Exc (y,r2) -> Exc (merge_cap x y, R.join r1 r2)
       | Exc (x,r), Inc y
       | Inc y, Exc (x,r) -> Exc (merge_sub x y, if y = [] then r else R.join r (R.of_interval (List.hd y, List.last y)))
-      
+
   let meet = curry @@ function
     | Inc x, Inc y -> Inc (merge_cap x y)
     | Exc (x,r1), Exc (y,r2) -> Exc (merge_cup x y, R.meet r1 r2)
@@ -1490,7 +1490,7 @@ module Enums : S = struct
   let widen x y = join x y
   let narrow x y = meet x y
 
-  let leq x y = 
+  let leq x y =
     print_endline @@ "leq? " ^ (Prelude.Ana.sprint pretty x) ^ " " ^ (Prelude.Ana.sprint pretty y);
     let j = join x y in
     print_endline @@ "join: " ^ (Prelude.Ana.sprint pretty j);
