@@ -1401,21 +1401,26 @@ module Enums : S = struct
   module R = Interval32 (* range for exclusion *)
   let size t = R.of_interval (Size.bits_i64 t)
   type e = I.t (* element *)
-  and t = Inc of e list | Exc of e list * R.t [@@deriving to_yojson] (* inclusion/exclusion set *)
+  and t = Inc of e list * R.t | Exc of e list * R.t [@@deriving to_yojson] (* inclusion/exclusion set *)
 
   let max_elems () = get_int "ana.int.enums_max" (* maximum number of resulting elements before going to top *)
 
-  let short _ = function
-    | Inc[] -> "bot" | Exc([],r) -> "top"
-    | Inc xs -> "{" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}"
-    | Exc (xs,r) -> "not {" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}"
+  let short _ =
+    let short_size x = "("^R.short 2 x^")" in
+    function
+    | Inc ([], r)-> "bot" ^ short_size r | Exc([],r) -> "top" ^ short_size r
+    | Inc (xs,r) -> "{" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}" ^ short_size r
+    | Exc (xs,r) -> "not {" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}" ^ short_size r
 
   let pretty_list xs = text "(" ++ (try List.reduce (fun a b -> a ++ text "," ++ b) xs with _ -> nil) ++ text ")"
-  let pretty_f _ _ = function
-    | Inc [] -> text "bot"
-    | Exc ([],r) -> text ("top, " ^ (Prelude.Ana.sprint R.pretty r))
-    | Inc xs -> text "Inc" ++ pretty_list (List.map (I.pretty ()) xs)
-    | Exc (xs,r) -> text "Exc" ++ pretty_list (List.map (I.pretty ()) xs)
+  let pretty_f _ _ =
+    let short_size x = "("^R.short 2 x^")" in
+    function
+    | Inc ([], r) -> text ("bot" ^ short_size r)
+    | Exc ([],r) -> text ("top, " ^ (Prelude.Ana.sprint R.pretty r) ^ short_size r)
+    | Inc (xs, r) -> text "Inc" ++ pretty_list (List.map (I.pretty ()) xs) ++ text (short_size r)
+    | Exc (xs,r) -> text "Exc" ++ pretty_list (List.map (I.pretty ()) xs) ++ text (short_size r)
+
   let toXML_f sh x = Xml.Element ("Leaf", [("text", sh 80 x)],[])
   let toXML m = toXML_f short m
   let pretty () x = pretty_f short () x
@@ -1425,7 +1430,7 @@ module Enums : S = struct
   let name () = "enums"
 
   let equal_to i = function
-    | Inc x ->
+    | Inc (x, r) ->
       if List.mem i x then
         if List.length x = 1 then `Eq
         else `Top
@@ -1434,19 +1439,19 @@ module Enums : S = struct
       if List.mem i x then `Neq
       else `Top
 
-  let bot () = Inc []
+  let bot () = Inc ([], R.bot ())
   let top_of ik = Exc ([], size ik)
   let top () = top_of (Size.max `Signed)
 
-  let of_int x = Inc [x]
+  let of_int x = Inc ([x], size Cil.IInt)
   let of_int_ikind _ = of_int
-  let cast_to t = function Inc xs -> (try Inc (List.map (I.cast_to t) xs |> List.sort_unique compare) with Size.Not_in_int64 -> top_of t) | Exc _ -> top_of t
+  let cast_to t = function Inc (xs, r) -> (try Inc ((List.map (I.cast_to t) xs |> List.sort_unique compare), size t) with Size.Not_in_int64 -> top_of t) | Exc _ -> top_of t
 
   let of_interval (x,y) = (* TODO this implementation might lead to very big lists; also use ana.int.enums_max? *)
     let rec build_set set start_num end_num =
       if start_num > end_num then set
       else (build_set (set @ [start_num]) (Int64.add start_num (Int64.of_int 1)) end_num) in
-    Inc (build_set [] x y)
+    Inc ((build_set [] x y), size Cil.IInt)
 
   let rec merge_cup a b = match a,b with
     | [],x | x,[] -> x
@@ -1470,20 +1475,44 @@ module Enums : S = struct
         | 1 -> merge_sub a ys
         | _ -> x :: merge_sub xs b
       )
+
+
+  (* checks that x and y have the same range, and warns (in debug mode fails) if this is not the case *)
+  let check_identical_range x y =
+    if x <> y then
+      if get_bool "dbg.debug" then
+        raise (Failure (Printf.sprintf "Operation on different sizes of int %s %s" (R.short 80 x) (R.short 80 y)))
+      else
+        M.warn (Printf.sprintf "Operation on different sizes of int %s %s" (R.short 80 x) (R.short 80 y))
+
+
   (* let merge_sub x y = Set.(diff (of_list x) (of_list y) |> to_list) *)
   let join a b =
     print_endline @@ (Prelude.Ana.sprint pretty a) ^ " " ^ (Prelude.Ana.sprint pretty b);
     match a, b with
-      | Inc x, Inc y -> let z = (merge_cup x y) in if List.length z <= max_elems () then Inc z else Exc ([], R.of_int 1000L)
-      | Exc (x,r1), Exc (y,r2) -> Exc (merge_cap x y, R.join r1 r2)
-      | Exc (x,r), Inc y
-      | Inc y, Exc (x,r) -> Exc (merge_sub x y, if y = [] then r else R.join r (R.of_interval (List.hd y, List.last y)))
+      | Inc (x, xr), Inc (y, yr) ->
+          check_identical_range xr yr;
+          let z = (merge_cup x y) in
+          if List.length z <= max_elems ()
+            then Inc (z, R.join xr yr)
+            else Exc ([], R.join xr yr)
+      | Exc (x,xr), Exc (y,yr) ->
+          check_identical_range xr yr;
+          Exc (merge_cap x y, R.join xr yr)
+      | Exc (x,xr), Inc (y, yr)
+      | Inc (y,yr), Exc (x,xr) -> Exc (merge_sub x y, R.join xr yr)
 
   let meet = curry @@ function
-    | Inc x, Inc y -> Inc (merge_cap x y)
-    | Exc (x,r1), Exc (y,r2) -> Exc (merge_cup x y, R.meet r1 r2)
-    | Inc x, Exc (y,r)
-    | Exc (y,r), Inc x -> Inc (merge_sub x y)
+    | Inc (x,xr), Inc (y,yr) ->
+        check_identical_range xr yr;
+        Inc ((merge_cap x y), R.meet xr yr)
+    | Exc (x,xr), Exc (y,yr) ->
+        check_identical_range xr yr;
+        Exc (merge_cup x y, R.meet xr yr)
+    | Inc (x,xr), Exc (y,yr)
+    | Exc (y,yr), Inc (x,xr) ->
+        check_identical_range xr yr;
+        Inc ((merge_sub x y), R.meet xr yr)
   (* let join x y = let r = join x y in print_endline @@ "join " ^ short 10 x ^ " " ^ short 10 y ^ " = " ^ short 10 r; r *)
   (* let meet x y = let r = meet x y in print_endline @@ "meet " ^ short 10 x ^ " " ^ short 10 y ^ " = " ^ short 10 r; r *)
 
