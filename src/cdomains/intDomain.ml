@@ -1403,6 +1403,25 @@ module Enums : S = struct
   type e = I.t (* element *)
   and t = Inc of e list | Exc of e list * R.t [@@deriving to_yojson] (* inclusion/exclusion set *)
 
+  let max_elems () = get_int "ana.int.enums_max" (* maximum number of resulting elements before going to top *)
+
+  let short _ = function
+    | Inc[] -> "bot" | Exc([],r) -> "top"
+    | Inc xs -> "{" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}"
+    | Exc (xs,r) -> "not {" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}"
+
+  let pretty_list xs = text "(" ++ (try List.reduce (fun a b -> a ++ text "," ++ b) xs with _ -> nil) ++ text ")"
+  let pretty_f _ _ = function
+    | Inc [] -> text "bot"
+    | Exc ([],r) -> text ("top, " ^ (Prelude.Ana.sprint R.pretty r)) 
+    | Inc xs -> text "Inc" ++ pretty_list (List.map (I.pretty ()) xs)
+    | Exc (xs,r) -> text "Exc" ++ pretty_list (List.map (I.pretty ()) xs)
+  let toXML_f sh x = Xml.Element ("Leaf", [("text", sh 80 x)],[])
+  let toXML m = toXML_f short m
+  let pretty () x = pretty_f short () x
+  let pretty_diff () (x,y) = Pretty.dprintf "%a instead of %a" pretty x pretty y
+  let printXml f x = BatPrintf.fprintf f "<value>\n<data>\n%s\n</data>\n</value>\n" (short 800 x)
+
   let name () = "enums"
 
   let equal_to i = function
@@ -1418,10 +1437,6 @@ module Enums : S = struct
   let bot () = Inc []
   let top_of ik = Exc ([], size ik)
   let top () = top_of (Size.max `Signed)
-  let short _ = function
-    | Inc[] -> "bot" | Exc([],r) -> "top"
-    | Inc xs -> "{" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}"
-    | Exc (xs,r) -> "not {" ^ (String.concat ", " (List.map (I.short 30) xs)) ^ "}"
 
   let of_int x = Inc [x]
   let of_int_ikind _ = of_int
@@ -1456,11 +1471,14 @@ module Enums : S = struct
         | _ -> x :: merge_sub xs b
       )
   (* let merge_sub x y = Set.(diff (of_list x) (of_list y) |> to_list) *)
-  let join = curry @@ function
-    | Inc x, Inc y -> Inc (merge_cup x y)
-    | Exc (x,r1), Exc (y,r2) -> Exc (merge_cap x y, R.join r1 r2)
-    | Exc (x,r), Inc y
-    | Inc y, Exc (x,r) -> Exc (merge_sub x y, if y = [] then r else R.join r (R.of_interval (List.hd y, List.last y)))
+  let join a b = 
+    print_endline @@ (Prelude.Ana.sprint pretty a) ^ " " ^ (Prelude.Ana.sprint pretty b);
+    match a, b with
+      | Inc x, Inc y -> let z = (merge_cup x y) in if List.length z <= max_elems () then Inc z else Exc ([], R.of_int 1000L)
+      | Exc (x,r1), Exc (y,r2) -> Exc (merge_cap x y, R.join r1 r2)
+      | Exc (x,r), Inc y
+      | Inc y, Exc (x,r) -> Exc (merge_sub x y, if y = [] then r else R.join r (R.of_interval (List.hd y, List.last y)))
+      
   let meet = curry @@ function
     | Inc x, Inc y -> Inc (merge_cap x y)
     | Exc (x,r1), Exc (y,r2) -> Exc (merge_cup x y, R.meet r1 r2)
@@ -1472,7 +1490,13 @@ module Enums : S = struct
   let widen x y = join x y
   let narrow x y = meet x y
 
-  let leq x y = join x y = y
+  let leq x y = 
+    print_endline @@ "leq? " ^ (Prelude.Ana.sprint pretty x) ^ " " ^ (Prelude.Ana.sprint pretty y);
+    let j = join x y in
+    print_endline @@ "join: " ^ (Prelude.Ana.sprint pretty j);
+    let res = j = y in
+    print_endline (string_of_bool res);
+    res
 
   let abstr_compare = curry @@ function
     | Exc _, Exc _ -> Inc[-1L; 0L ;1L]
@@ -1500,7 +1524,6 @@ module Enums : S = struct
        | _ -> Inc[-1L;0L;1L]
       )
 
-  let max_elems () = get_int "ana.int.enums_max" (* maximum number of resulting elements before going to top *)
   let lift1 f = function
     | Inc[x] -> Inc[f x]
     | Inc xs when List.length xs <= max_elems () -> Inc (List.sort_unique compare @@ List.map f xs)
@@ -1552,18 +1575,6 @@ module Enums : S = struct
   let equal = (=)
   let compare = compare
   let isSimple _  = true
-  let pretty_list xs = text "(" ++ (try List.reduce (fun a b -> a ++ text "," ++ b) xs with _ -> nil) ++ text ")"
-  let pretty_f _ _ = function
-    | Inc [] -> text "bot"
-    | Exc ([],r) -> text "top"
-    | Inc xs -> text "Inc" ++ pretty_list (List.map (I.pretty ()) xs)
-    | Exc (xs,r) -> text "Exc" ++ pretty_list (List.map (I.pretty ()) xs)
-  let toXML_f sh x = Xml.Element ("Leaf", [("text", sh 80 x)],[])
-  let toXML m = toXML_f short m
-  let pretty () x = pretty_f short () x
-  let pretty_diff () (x,y) = Pretty.dprintf "%a instead of %a" pretty x pretty y
-  let printXml f x = BatPrintf.fprintf f "<value>\n<data>\n%s\n</data>\n</value>\n" (short 800 x)
-
   let of_bool x = Inc [if x then Int64.one else Int64.zero]
   let of_bool_ikind _ = of_bool
 
