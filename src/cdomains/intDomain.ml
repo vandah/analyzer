@@ -1485,6 +1485,13 @@ module Enums : S = struct
       else
         M.warn (Printf.sprintf "Operation on different sizes of int %s %s" (R.short 80 x) (R.short 80 y))
 
+  let check_range (x: t) (y: t) = match x, y with
+    | Inc (_,xr), Inc (_,yr)
+    | Exc (_,xr), Inc (_,yr)
+    | Inc (_,xr), Exc (_,yr)
+    | Exc (_,xr), Exc (_,yr)
+      -> check_identical_range xr yr
+
 
   (* let merge_sub x y = Set.(diff (of_list x) (of_list y) |> to_list) *)
   let join a b =
@@ -1527,60 +1534,75 @@ module Enums : S = struct
     print_endline (string_of_bool res);
     res
 
-  let abstr_compare = curry @@ function
-    | Exc _, Exc _ -> Inc[-1L; 0L ;1L]
-    | Inc[],_ | _,Inc[] -> Inc[]
-    | Inc x, Inc y ->
+  (* TODO: check equal range *)
+  let abstr_compare a b =
+    check_range a b;
+    match a, b with
+    | Exc _, Exc _ -> Inc([-1L; 0L ;1L], size Cil.IInt)
+    | Inc([],_),_ | _,Inc([],_) -> bot ()
+    | Inc (x, xr), Inc (y, yr) ->
       let x_max = List.last x in
       let x_min = List.hd x in
       let y_max = List.last y in
       let y_min = List.hd y in
-      if  x_max < y_min then Inc[-1L]
-      else if y_max < x_min then Inc[1L]
+      if  x_max < y_min then Inc([-1L], size Cil.IInt)
+      else if y_max < x_min then Inc([1L], size Cil.IInt)
       else if x_min = y_max then
-        if  y_min = x_max then Inc[0L]
-        else Inc[0L;1L]
-      else if y_min = x_max then Inc[-1L;0L]
-      else Inc[-1L;0L;1L]
-    | Inc l, Exc (l',r) ->
-      (match merge_sub l l' with
-       | [] -> Inc[-1L;1L]
-       | _ -> Inc[-1L;0L;1L]
+        if  y_min = x_max then Inc([0L], size Cil.IInt)
+        else Inc([0L;1L], size Cil.IInt)
+      else if y_min = x_max then Inc([-1L;0L], size Cil.IInt)
+      else Inc([-1L;0L;1L], size Cil.IInt)
+    | Inc (x,xr), Exc (y,yr) ->
+      (match merge_sub x y with
+       | [] -> Inc([-1L;1L], size Cil.IInt)
+       | _ -> Inc([-1L;0L;1L], size Cil.IInt)
       )
-    | Exc (l,r), Inc l' ->
-      (match merge_sub l' l with
-       | [] -> Inc[-1L;1L]
-       | _ -> Inc[-1L;0L;1L]
+    | Exc (x,xr), Inc (y,yr) ->
+      (match merge_sub x y with
+       | [] -> Inc([-1L;1L], size Cil.IInt)
+       | _ -> Inc([-1L;0L;1L], size Cil.IInt)
       )
 
   let lift1 f = function
-    | Inc[x] -> Inc[f x]
-    | Inc xs when List.length xs <= max_elems () -> Inc (List.sort_unique compare @@ List.map f xs)
+    | Inc ([x], r)-> Inc ([f x], r)
+    | Inc (xs, r) when List.length xs <= max_elems () -> Inc ((List.sort_unique compare @@ List.map f xs), r)
     | _ -> top ()
-  let lift2 f = curry @@ function
-    | Inc[],_| _,Inc[] -> Inc[]
-    | Inc[x],Inc[y] -> Inc[f x y]
-    | Inc xs,Inc ys ->
+  let lift2 f a b =
+    check_range a b;
+    match a, b with
+    | Inc([],r), _| _,Inc([], r) -> Inc ([], r )
+    | Inc([x],xr),Inc([y], yr) -> Inc([f x y], R.join xr yr) (* Is R.join xr yr senisble? *)
+    | Inc(xs, xr),Inc(ys,yr) ->
       let r = List.cartesian_product xs ys |> List.map (uncurry f) |> List.sort_unique compare in
-      if List.length r <= max_elems () then Inc r else top ()
+      if List.length r <= max_elems () then Inc(r, R.join xr yr) else top ()
     | _,_ -> top ()
   let lift2 f a b =
     try lift2 f a b with Division_by_zero -> top ()
 
-  let neg  = lift1 I.neg
-  let add  = curry @@ function
-    | Inc[0L],x | x,Inc[0L] -> x
+  let neg = lift1 I.neg
+  let add a b =
+    check_range a b;
+    match a, b with
+    | Inc([0L], r),x | x,Inc([0L], r) -> x
     | x,y -> lift2 I.add x y
-  let sub  = lift2 I.sub
-  let mul  = curry @@ function
-    | Inc[1L],x | x,Inc[1L] -> x
-    | Inc[0L],_ | _,Inc[0L] -> Inc[0L]
+  let sub a b =
+    check_range a b;
+    lift2 I.sub a b
+  let mul a b =
+    check_range a b;
+    (* TODO: Fix range of result *)
+    match a, b with
+    | Inc([1L],_),x | x,Inc([1L],_) -> x
+    | Inc([0L],r),_ | _,Inc([0L],r) -> Inc([0L],r)
     | x,y -> lift2 I.mul x y
-  let div  = curry @@ function
-    | Inc[1L],x | x,Inc[1L] -> x
-    | Inc[0L],_ -> Inc[0L]
-    | _,Inc[0L] -> top ()
-    | x,y -> lift2 I.div x y
+  let div a b =
+    check_range a b;
+    match a, b with
+      (* TODO: Fix range of result *)
+      | Inc([1L], _),x | x,Inc([1L],_) -> x
+      | Inc([0L], r),_ -> Inc([0L], r)
+      | _,Inc([0L], _) -> top ()
+      | x,y -> lift2 I.div x y
   let rem  = lift2 I.rem
   let lt = lift2 I.lt
   let gt = lift2 I.gt
@@ -1604,19 +1626,19 @@ module Enums : S = struct
   let equal = (=)
   let compare = compare
   let isSimple _  = true
-  let of_bool x = Inc [if x then Int64.one else Int64.zero]
+  let of_bool x = Inc ([if x then Int64.one else Int64.zero], size Cil.IInt) (* TODO: is this the right size? *)
   let of_bool_ikind _ = of_bool
 
   let to_bool = function
-    | Inc [] | Exc ([],_) -> None
-    | Inc [0L] -> Some false
-    | Inc xs when List.for_all ((<>) 0L) xs -> Some true
+    | Inc ([], _) | Exc ([],_) -> None
+    | Inc ([0L], _) -> Some false
+    | Inc (xs, _) when List.for_all ((<>) 0L) xs -> Some true
     | Exc (xs,_) when List.exists ((=) 0L) xs -> Some true
     | _ -> None
   let is_bool = BatOption.is_some % to_bool
-  let of_int  x = Inc [x]
+  let of_int  x = Inc ([x], size Cil.IInt)
   let of_int_ikind _ = of_int
-  let to_int = function Inc [x] -> Some x | _ -> None
+  let to_int = function Inc ([x], r) -> Some x | _ -> None
   let is_int = BatOption.is_some % to_int
 
   let to_excl_list = function Exc (x,r) when x<>[] -> Some x | _ -> None
@@ -1626,12 +1648,12 @@ module Enums : S = struct
   let ending       x = top ()
   let starting_ikind _ = starting
   let ending_ikind _ = ending
-  let maximal = function Inc xs when xs<>[] -> Some (List.last xs) | _ -> None
-  let minimal = function Inc (x::xs) -> Some x | _ -> None
+  let maximal = function Inc (xs, r) when xs<>[] -> Some (List.last xs) | _ -> None
+  let minimal = function Inc ((x::xs), r) -> Some x | _ -> None
   (* let of_incl_list xs = failwith "TODO" *)
 
   let invariant c = function
-    | Inc ps ->
+    | Inc (ps, r) ->
       List.fold_left (fun a x ->
           let i = Invariant.of_string (c ^ " == " ^ Int64.to_string x) in
           Invariant.(a || i)
