@@ -1492,47 +1492,34 @@ module Enums : S = struct
     | Exc (_,xr), Exc (_,yr)
       -> check_identical_range xr yr
 
-
-  (* let merge_sub x y = Set.(diff (of_list x) (of_list y) |> to_list) *)
   let join a b =
-    print_endline @@ (Prelude.Ana.sprint pretty a) ^ " " ^ (Prelude.Ana.sprint pretty b);
+    check_range a b;
     match a, b with
       | Inc (x, xr), Inc (y, yr) ->
-          check_identical_range xr yr;
           let z = (merge_cup x y) in
           if List.length z <= max_elems ()
             then Inc (z, R.join xr yr)
             else Exc ([], R.join xr yr)
       | Exc (x,xr), Exc (y,yr) ->
-          check_identical_range xr yr;
           Exc (merge_cap x y, R.join xr yr)
       | Exc (x,xr), Inc (y, yr)
       | Inc (y,yr), Exc (x,xr) -> Exc (merge_sub x y, R.join xr yr)
 
-  let meet = curry @@ function
-    | Inc (x,xr), Inc (y,yr) ->
-        check_identical_range xr yr;
-        Inc ((merge_cap x y), R.meet xr yr)
-    | Exc (x,xr), Exc (y,yr) ->
-        check_identical_range xr yr;
-        Exc (merge_cup x y, R.meet xr yr)
-    | Inc (x,xr), Exc (y,yr)
-    | Exc (y,yr), Inc (x,xr) ->
-        check_identical_range xr yr;
-        Inc ((merge_sub x y), R.meet xr yr)
-  (* let join x y = let r = join x y in print_endline @@ "join " ^ short 10 x ^ " " ^ short 10 y ^ " = " ^ short 10 r; r *)
-  (* let meet x y = let r = meet x y in print_endline @@ "meet " ^ short 10 x ^ " " ^ short 10 y ^ " = " ^ short 10 r; r *)
+  let meet a b =
+    check_range a b;
+    match a, b with
+      | Inc (x,xr), Inc (y,yr) ->
+          Inc ((merge_cap x y), R.meet xr yr)
+      | Exc (x,xr), Exc (y,yr) ->
+          Exc (merge_cup x y, R.meet xr yr)
+      | Inc (x,xr), Exc (y,yr)
+      | Exc (y,yr), Inc (x,xr) ->
+          Inc ((merge_sub x y), R.meet xr yr)
 
   let widen x y = join x y
   let narrow x y = meet x y
 
-  let leq x y =
-    print_endline @@ "leq? " ^ (Prelude.Ana.sprint pretty x) ^ " " ^ (Prelude.Ana.sprint pretty y);
-    let j = join x y in
-    print_endline @@ "join: " ^ (Prelude.Ana.sprint pretty j);
-    let res = j = y in
-    print_endline (string_of_bool res);
-    res
+  let leq x y = join x y = y
 
   (* TODO: check equal range *)
   let abstr_compare a b =
@@ -1626,8 +1613,9 @@ module Enums : S = struct
   let equal = (=)
   let compare = compare
   let isSimple _  = true
-  let of_bool x = Inc ([if x then Int64.one else Int64.zero], size Cil.IInt) (* TODO: is this the right size? *)
-  let of_bool_ikind _ = of_bool
+  let of_bool_ikind ikind x = if x then Exc ([Int64.zero], size ikind) else Inc ([Int64.zero], size ikind)
+
+  let of_bool x = of_bool_ikind Cil.IInt x
 
   let to_bool = function
     | Inc ([], _) | Exc ([],_) -> None
@@ -1637,7 +1625,7 @@ module Enums : S = struct
     | _ -> None
   let is_bool = BatOption.is_some % to_bool
   let of_int  x = Inc ([x], size Cil.IInt)
-  let of_int_ikind _ = of_int
+  let of_int_ikind ikind x = Inc ([x], size ikind)
   let to_int = function Inc ([x], r) -> Some x | _ -> None
   let is_int = BatOption.is_some % to_int
 
