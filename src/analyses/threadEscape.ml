@@ -62,8 +62,8 @@ struct
 
   let threadenter ctx lval f args =
     match args with
-    | [ptc_arg] -> reachable ctx.ask ptc_arg
-    | _ -> D.bot ()
+    | [ptc_arg] -> [reachable ctx.ask ptc_arg]
+    | _ -> [D.bot ()]
 
   let threadspawn ctx lval f args fctx =
     D.join ctx.local @@

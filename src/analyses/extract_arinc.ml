@@ -398,7 +398,7 @@ struct
       ) tasks
     in
     let f_d = snd (Tasks.choose tasks_f) in
-    f_d
+    [f_d]
 
   let threadspawn ctx lval f args fctx = ctx.local
 end

@@ -84,7 +84,7 @@ struct
     (Access.LSSSet.singleton (Access.LSSet.empty ()), Access.LSSet.empty ())
 
   let threadenter ctx lval f args =
-    D.lift @@ S.threadenter (conv ctx) lval f args
+    List.map D.lift @@ S.threadenter (conv ctx) lval f args
 
   let threadspawn ctx lval f args fctx =
     D.lift @@ S.threadspawn (conv ctx) lval f args (conv fctx)
@@ -250,7 +250,7 @@ struct
   let special ctx r f args        = lift_fun ctx (lift ctx) S.special ((|>) args % (|>) f % (|>) r)
   let combine' ctx r fe f args fc es = lift_fun ctx (lift ctx) S.combine (fun p -> p r fe f args fc (fst es))
 
-  let threadenter ctx lval f args = lift_fun ctx lift_start_level S.threadenter ((|>) args % (|>) f % (|>) lval)
+  let threadenter ctx lval f args = lift_fun ctx (List.map lift_start_level) S.threadenter ((|>) args % (|>) f % (|>) lval)
   let threadspawn ctx lval f args fctx = lift_fun ctx (lift ctx) S.threadspawn ((|>) (conv fctx) % (|>) args % (|>) f % (|>) lval)
 
   let leq0 = function
@@ -380,7 +380,7 @@ struct
   let skip ctx        = lift_fun ctx S.skip   identity
   let special ctx r f args       = lift_fun ctx S.special ((|>) args % (|>) f % (|>) r)
 
-  let threadenter ctx lval f args = lift_fun ctx S.threadenter ((|>) args % (|>) f % (|>) lval)
+  let threadenter ctx lval f args = S.threadenter (conv ctx) lval f args |> List.map (fun d -> (d, snd ctx.local))
   let threadspawn ctx lval f args fctx = lift_fun ctx S.threadspawn ((|>) (conv fctx) % (|>) args % (|>) f % (|>) lval)
 
   let enter ctx r f args =
@@ -432,7 +432,7 @@ struct
   let skip ctx        = lift_fun ctx S.skip   identity
   let special ctx r f args       = lift_fun ctx S.special ((|>) args % (|>) f % (|>) r)
 
-  let threadenter ctx lval f args = lift_fun ctx S.threadenter ((|>) args % (|>) f % (|>) lval)
+  let threadenter ctx lval f args = S.threadenter (conv ctx) lval f args |> List.map (fun d -> (d, snd ctx.local))
   let threadspawn ctx lval f args fctx = lift_fun ctx S.threadspawn ((|>) (conv fctx) % (|>) args % (|>) f % (|>) lval)
 
   let enter ctx r f args =
@@ -507,7 +507,7 @@ struct
   let special ctx r f args       = lift_fun ctx D.lift S.special ((|>) args % (|>) f % (|>) r)        `Bot
   let combine ctx r fe f args fc es = lift_fun ctx D.lift S.combine (fun p -> p r fe f args fc (D.unlift es)) `Bot
 
-  let threadenter ctx lval f args = lift_fun ctx D.lift S.threadenter ((|>) args % (|>) f % (|>) lval) `Bot
+  let threadenter ctx lval f args = lift_fun ctx (List.map D.lift) S.threadenter ((|>) args % (|>) f % (|>) lval) []
   let threadspawn ctx lval f args fctx = lift_fun ctx D.lift S.threadspawn ((|>) (conv fctx) % (|>) args % (|>) f % (|>) lval) `Bot
 
   let part_access _ _ _ _ =
@@ -566,11 +566,14 @@ struct
     and query x = S.query ctx x
     and spawn lval f args =
       (* TODO: adjust ctx node/edge? *)
-      let d = S.threadenter ctx lval f args in
-      let c = S.context d in
-      spawns := (lval, f, args, d) :: !spawns;
-      if not full_context then sidel (FunctionEntry f, c) d;
-      ignore (getl (Function f, c))
+      (* TODO: don't repeat for all paths that spawn same *)
+      let ds = S.threadenter ctx lval f args in
+      List.iter (fun d ->
+          let c = S.context d in
+          spawns := (lval, f, args, d) :: !spawns;
+          if not full_context then sidel (FunctionEntry f, c) d;
+          ignore (getl (Function f, c))
+        ) ds
     in
     (* ... nice, right! *)
     let pval, diff = S.sync ctx in
@@ -593,6 +596,7 @@ struct
         }
       and query' x = S.query ctx' x
       in
+      (* TODO: don't forget path dependencies *)
       let one_spawn (lval, f, args, fd) =
         let rec fctx =
           { ctx with
@@ -606,7 +610,6 @@ struct
       bigsqcup (List.map one_spawn spawns)
 
   let common_join ctx d splits spawns =
-    (* bigsqcup (d :: splits @ spawns) *)
     thread_spawns ctx (bigsqcup (d :: splits)) spawns
 
   let common_joins ctx ds splits spawns = common_join ctx (bigsqcup ds) splits spawns
@@ -1023,21 +1026,6 @@ struct
     let d = D.fold h ctx.local (D.empty ()) in
     if D.is_bot d then raise Deadcode else d
 
-  let assign ctx l e    = map ctx Spec.assign  (fun h -> h l e )
-  let vdecl ctx v       = map ctx Spec.vdecl   (fun h -> h v)
-  let body   ctx f      = map ctx Spec.body    (fun h -> h f   )
-  let return ctx e f    = map ctx Spec.return  (fun h -> h e f )
-  let branch ctx e tv   = map ctx Spec.branch  (fun h -> h e tv)
-  let intrpt ctx        = map ctx Spec.intrpt  identity
-  let asm ctx           = map ctx Spec.asm     identity
-  let skip ctx          = map ctx Spec.skip    identity
-  let special ctx l f a = map ctx Spec.special (fun h -> h l f a)
-
-  let threadenter ctx lval f args = map ctx Spec.threadenter (fun h -> h lval f args)
-  let threadspawn ctx lval f args fctx =
-    let fd1 = D.choose fctx.local in
-    map ctx Spec.threadspawn (fun h -> h lval f args (conv fctx fd1))
-
   let fold ctx f g h a =
     let k x a =
       try h a @@ g @@ f @@ conv ctx x
@@ -1052,6 +1040,23 @@ struct
       with Deadcode -> a
     in
     D.fold k ctx.local a
+
+  let assign ctx l e    = map ctx Spec.assign  (fun h -> h l e )
+  let vdecl ctx v       = map ctx Spec.vdecl   (fun h -> h v)
+  let body   ctx f      = map ctx Spec.body    (fun h -> h f   )
+  let return ctx e f    = map ctx Spec.return  (fun h -> h e f )
+  let branch ctx e tv   = map ctx Spec.branch  (fun h -> h e tv)
+  let intrpt ctx        = map ctx Spec.intrpt  identity
+  let asm ctx           = map ctx Spec.asm     identity
+  let skip ctx          = map ctx Spec.skip    identity
+  let special ctx l f a = map ctx Spec.special (fun h -> h l f a)
+
+  let threadenter ctx lval f args =
+    let g xs ys = (List.map (fun y -> D.singleton y) ys) @ xs in
+    fold' ctx Spec.threadenter (fun h -> h lval f args) g []
+  let threadspawn ctx lval f args fctx =
+    let fd1 = D.choose fctx.local in
+    map ctx Spec.threadspawn (fun h -> h lval f args (conv fctx fd1))
 
   let sync ctx =
     fold' ctx Spec.sync identity (fun (a,b) (a',b') -> D.add a' a, b'@b) (D.empty (), [])

@@ -190,9 +190,13 @@ struct
     d, w
 
   let threadenter ctx lval f args =
-    let d = S.threadenter (unlift_ctx ctx) lval f args in
-    let w = step_ctx ctx in
-    d, w
+    let dl = S.threadenter (unlift_ctx ctx) lval f args in
+    List.map (fun d ->
+        let to_node = (MyCFG.FunctionEntry f, S.context d) in
+        let w' = (VES.bot (), `Lifted to_node)
+        in
+        (d, w')
+      ) dl
 
   let threadspawn ctx lval f args fctx =
     let d = S.threadspawn (unlift_ctx ctx) lval f args (unlift_ctx fctx) in
