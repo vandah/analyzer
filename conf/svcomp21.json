@@ -21,6 +21,11 @@
       "symb_locks",
       "region",
       "thread"
+    ],
+    "path_sens": [
+      "mutex",
+      "threadflag",
+      "thread"
     ]
   },
   "exp": {
