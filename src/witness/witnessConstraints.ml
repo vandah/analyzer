@@ -304,9 +304,10 @@ struct
 
   let val_of c = (Dom.singleton (Spec.val_of c) (R.bot ()), Sync.bot ())
   let context (l, _) =
-    if Dom.cardinal l <> 1 then
+    if Dom.cardinal l <> 1 then (
+      ignore (Pretty.printf "CONTEXT %a\n" Dom.pretty l);
       failwith "PathSensitive3.context must be called with a singleton set."
-    else
+    ) else
       Spec.context @@ Dom.choose l
 
   let conv ctx x =
@@ -334,7 +335,7 @@ struct
       try Dom.add (g (f (conv ctx x))) (step_ctx_edge ctx x) xs
       with Deadcode -> xs
     in
-    let d = Dom.fold h (fst ctx.local) (Dom.empty ()) in
+    let d = Dom.fold h (fst ctx.local) (Dom.empty ()) |> Dom.reduce in
     if Dom.is_bot d then raise Deadcode else (d, Sync.bot ())
 
   let assign ctx l e    = map ctx Spec.assign  (fun h -> h l e )

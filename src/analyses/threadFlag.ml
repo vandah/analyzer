@@ -32,6 +32,8 @@ struct
   let create_tid v =
     Flag.get_multi ()
 
+  let should_join = D.equal
+
   let body ctx f = ctx.local
 
   let branch ctx exp tv = ctx.local
@@ -79,7 +81,7 @@ struct
     create_tid f
 
   let threadspawn ctx lval f args fctx =
-    Flag.get_main ()
+    D.join ctx.local (Flag.get_main ())
 end
 
 let _ =
